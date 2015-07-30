@@ -18,6 +18,8 @@
  */
 package org.apache.felix.coordinator.impl;
 
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +30,7 @@ import junit.framework.TestCase;
 import org.osgi.service.coordinator.Coordination;
 import org.osgi.service.coordinator.CoordinationException;
 import org.osgi.service.coordinator.Participant;
+import org.osgi.test.support.sleep.Sleep;
 
 public class CoordinatorImplTest extends TestCase
 {
@@ -133,8 +136,8 @@ public class CoordinatorImplTest extends TestCase
     public void test_coordinationCorrectlyOrphanedOnGC() throws InterruptedException
     {
         final CountDownLatch latch = new CountDownLatch(1);
-        WeakReference<Coordination> coord = new WeakReference<Coordination>(coordinator.create("test", 0));
-        coord.get().addParticipant(new Participant() {
+        Coordination coordination = coordinator.create("test", 0);
+        coordination.addParticipant(new Participant() {
             
             public void failed(Coordination coordination) throws Exception {
                 latch.countDown();
@@ -143,7 +146,9 @@ public class CoordinatorImplTest extends TestCase
             public void ended(Coordination coordination) throws Exception {
             }
         });
-        System.gc();
+        coordination = null;
+        WeakReference<Coordination> coord = new WeakReference<Coordination>(coordination, new ReferenceQueue<Coordination>());
+        assertReferenceEnqueued(coord);
         latch.await(10, TimeUnit.SECONDS);
         Assert.assertEquals(0, coordinator.getCoordinations().size());
         Assert.assertEquals("Non referenced Coordination should be failed after gc", 0, latch.getCount());
@@ -453,4 +458,13 @@ public class CoordinatorImplTest extends TestCase
             this.addParticipantFailure = t;
         }
     }
+    
+    private static void assertReferenceEnqueued(Reference<?> reference) throws InterruptedException {
+        for (int i = 0; i < 10 && !reference.isEnqueued(); i++) {
+            System.gc();
+            Thread.sleep(500);
+        }
+        assertTrue("Coordination was not garbage collected", reference.isEnqueued());
+    }
+
 }
