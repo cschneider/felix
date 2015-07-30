@@ -21,7 +21,6 @@ package org.apache.felix.coordinator.impl;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import junit.framework.Assert;
 import junit.framework.TestCase;
@@ -40,7 +39,6 @@ public class CoordinatorImplTest extends TestCase
     protected void setUp() throws Exception
     {
         super.setUp();
-
         mgr = new CoordinationMgr();
         coordinator = new CoordinatorImpl(null, mgr);
     }
@@ -132,7 +130,7 @@ public class CoordinatorImplTest extends TestCase
         assertNull(coordinator.peek());
     }
     
-    public void test_coordinationCorrectlyOrphaned() throws InterruptedException
+    public void test_coordinationCorrectlyOrphanedOnGC() throws InterruptedException
     {
         final CountDownLatch latch = new CountDownLatch(1);
         WeakReference<Coordination> coord = new WeakReference<Coordination>(coordinator.create("test", 0));
@@ -149,6 +147,24 @@ public class CoordinatorImplTest extends TestCase
         latch.await(10, TimeUnit.SECONDS);
         Assert.assertEquals(0, coordinator.getCoordinations().size());
         Assert.assertEquals("Non referenced Coordination should be failed after gc", 0, latch.getCount());
+    }
+    
+    public void test_coordinationCorrectlyOrphanedOnMgrShutdown() throws InterruptedException
+    {
+        final CountDownLatch latch = new CountDownLatch(1);
+        Coordination coord = coordinator.create("test", 0);
+        coord.addParticipant(new Participant() {
+            
+            public void failed(Coordination coordination) throws Exception {
+                latch.countDown();
+            }
+            
+            public void ended(Coordination coordination) throws Exception {
+            }
+        });
+        mgr.cleanUp();
+        Assert.assertEquals(0, coordinator.getCoordinations().size());
+        Assert.assertEquals("Coordination from same bundle should be failed after mgr.dispose", 0, latch.getCount());
     }
 
 
