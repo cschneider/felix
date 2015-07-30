@@ -182,7 +182,7 @@ public class CoordinatorImpl implements Coordinator
      */
     public boolean fail(final Throwable reason)
     {
-        CoordinationImpl current = (CoordinationImpl)mgr.peek();
+        Coordination current = mgr.peek();
         if (current != null)
         {
             return current.fail(reason);

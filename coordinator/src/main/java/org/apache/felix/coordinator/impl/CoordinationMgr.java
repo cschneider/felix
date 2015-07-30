@@ -263,7 +263,9 @@ public class CoordinationMgr
         {
             for(final CoordinationImpl c : this.coordinations.values() )
             {
-                result.add(c.getHolder());
+                if (c.getHolder() != null) {
+                    result.add(c.getHolder());
+                }
             }
         }
         return result;

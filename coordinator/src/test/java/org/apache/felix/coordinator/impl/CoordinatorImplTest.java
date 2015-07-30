@@ -18,6 +18,12 @@
  */
 package org.apache.felix.coordinator.impl;
 
+import java.lang.ref.WeakReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import junit.framework.Assert;
 import junit.framework.TestCase;
 
 import org.osgi.service.coordinator.Coordination;
@@ -125,6 +131,26 @@ public class CoordinatorImplTest extends TestCase
         }
         assertNull(coordinator.peek());
     }
+    
+    public void test_coordinationCorrectlyOrphaned() throws InterruptedException
+    {
+        final CountDownLatch latch = new CountDownLatch(1);
+        WeakReference<Coordination> coord = new WeakReference<Coordination>(coordinator.create("test", 0));
+        coord.get().addParticipant(new Participant() {
+            
+            public void failed(Coordination coordination) throws Exception {
+                latch.countDown();
+            }
+            
+            public void ended(Coordination coordination) throws Exception {
+            }
+        });
+        System.gc();
+        latch.await(10, TimeUnit.SECONDS);
+        Assert.assertEquals(0, coordinator.getCoordinations().size());
+        Assert.assertEquals("Non referenced Coordination should be failed after gc", 0, latch.getCount());
+    }
+
 
     /**
      * Regression test for FELIX-4976
