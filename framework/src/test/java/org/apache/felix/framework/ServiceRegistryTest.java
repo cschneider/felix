@@ -22,9 +22,13 @@ import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.Observable;
+import java.util.Observer;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import junit.framework.TestCase;
@@ -65,6 +69,7 @@ public class ServiceRegistryTest extends TestCase
         ServiceRegistry sr = new ServiceRegistry(new Logger(), null);
         EventHook hook = new EventHook()
         {
+            @Override
             public void event(ServiceEvent event, Collection contexts)
             {
             }
@@ -133,6 +138,7 @@ public class ServiceRegistryTest extends TestCase
         ServiceRegistry sr = new ServiceRegistry(new Logger(), null);
         FindHook hook = new FindHook()
         {
+            @Override
             public void find(BundleContext context, String name, String filter,
                 boolean allServices, Collection references)
             {
@@ -201,10 +207,12 @@ public class ServiceRegistryTest extends TestCase
         ServiceRegistry sr = new ServiceRegistry(new Logger(), null);
         ListenerHook hook = new ListenerHook()
         {
+            @Override
             public void added(Collection listeners)
             {
             }
 
+            @Override
             public void removed(Collection listener)
             {
             }
@@ -272,23 +280,28 @@ public class ServiceRegistryTest extends TestCase
         ServiceRegistry sr = new ServiceRegistry(new Logger(), null);
         class CombinedService implements ListenerHook, FindHook, EventHook, Runnable
         {
+            @Override
             public void added(Collection listeners)
             {
             }
 
+            @Override
             public void removed(Collection listener)
             {
             }
 
+            @Override
             public void find(BundleContext context, String name, String filter,
                     boolean allServices, Collection references)
             {
             }
 
+            @Override
             public void event(ServiceEvent event, Collection contexts)
             {
             }
 
+            @Override
             public void run()
             {
             }
@@ -506,9 +519,8 @@ public class ServiceRegistryTest extends TestCase
 
         inUseMap.put(b, new UsageCount[] {uc});
 
-        assertTrue(sr.ungetService(b, ref, null));
+        assertFalse(sr.ungetService(b, ref, null));
         assertNull(uc.m_svcHolderRef.get());
-        assertNull(inUseMap.get(b));
     }
 
     @SuppressWarnings("unchecked")
@@ -538,7 +550,6 @@ public class ServiceRegistryTest extends TestCase
 
         assertTrue(sr.ungetService(b, ref, null));
         assertNull(uc.m_svcHolderRef.get());
-        assertNull(inUseMap.get(b));
 
         Mockito.verify(reg, Mockito.times(1)).
             ungetService(Mockito.isA(Bundle.class), Mockito.eq(svc));
@@ -596,7 +607,6 @@ public class ServiceRegistryTest extends TestCase
 
         assertTrue(sr.ungetService(b, ref, null));
         assertNull(uc.m_svcHolderRef.get());
-        assertNull(inUseMap.get(b));
 
         Mockito.verify(reg, Mockito.never()).
             ungetService(Mockito.isA(Bundle.class), Mockito.any());
@@ -638,7 +648,6 @@ public class ServiceRegistryTest extends TestCase
             assertEquals("Test!", re.getMessage());
         }
         assertNull(uc.m_svcHolderRef.get());
-        assertNull(inUseMap.get(b));
 
         Mockito.verify(reg, Mockito.times(1)).ungetService(b, svc);
     }
@@ -1031,6 +1040,131 @@ public class ServiceRegistryTest extends TestCase
 
         assertEquals(1, inUseMap.get(b).length);
         assertSame(uc2, inUseMap.get(b)[0]);
+    }
+
+    public void testGetUngetServiceFactory() throws Exception
+    {
+        final ServiceRegistry sr = new ServiceRegistry(null, null);
+        final Bundle regBundle = Mockito.mock(Bundle.class);
+        final ServiceRegistration<?> reg = sr.registerService(regBundle, new String[] {Observer.class.getName()},
+                new ServiceFactory<Observer>()
+                {
+
+                    final class ObserverImpl implements Observer
+                    {
+
+                        public volatile boolean active = true;
+
+                        @Override
+                        public void update(Observable o, Object arg)
+                        {
+                            if ( !active )
+                            {
+                                throw new IllegalArgumentException();
+                            }
+                        }
+
+                    };
+
+                    @Override
+                    public Observer getService(Bundle bundle, ServiceRegistration<Observer> registration)
+                    {
+                        return new ObserverImpl();
+                    }
+
+                    @Override
+                    public void ungetService(Bundle bundle, ServiceRegistration<Observer> registration, Observer service)
+                    {
+                        ((ObserverImpl)service).active = false;
+                    }
+                }, null);
+
+        final Bundle clientBundle = Mockito.mock(Bundle.class);
+        Mockito.when(clientBundle.getBundleId()).thenReturn(42L);
+
+        // check simple get/unget
+        final Object obj = sr.getService(clientBundle, reg.getReference(), false);
+        assertNotNull(obj);
+        assertTrue(obj instanceof Observer);
+        ((Observer)obj).update(null, null);
+        sr.ungetService(clientBundle, reg.getReference(), null);
+        try {
+            ((Observer)obj).update(null, null);
+            fail();
+        }
+        catch ( final IllegalArgumentException iae)
+        {
+            // expected
+        }
+
+        // start three threads
+        final int MAX_THREADS = 3;
+        final int MAX_LOOPS = 50000;
+        final CountDownLatch latch = new CountDownLatch(MAX_THREADS);
+        final Thread[] threads = new Thread[MAX_THREADS];
+        final List<Exception> exceptions = Collections.synchronizedList(new ArrayList<Exception>());
+        for(int i=0; i<MAX_THREADS; i++)
+        {
+            threads[i] = new Thread(new Runnable()
+            {
+
+                @Override
+                public void run()
+                {
+                    try
+                    {
+                        Thread.currentThread().sleep(50);
+                    }
+                    catch (InterruptedException e1)
+                    {
+                        // ignore
+                    }
+                    for(int i=0; i < MAX_LOOPS; i++)
+                    {
+                        try
+                        {
+                            final Object obj = sr.getService(clientBundle, reg.getReference(), false);
+                            ((Observer)obj).update(null, null);
+                            sr.ungetService(clientBundle, reg.getReference(), null);
+                        }
+                        catch ( final Exception e)
+                        {
+                            exceptions.add(e);
+                        }
+                    }
+                    latch.countDown();
+                }
+            });
+        }
+        for(int i=0; i<MAX_THREADS; i++)
+        {
+            threads[i].start();
+        }
+
+        latch.await();
+
+        assertTrue("" + exceptions.size(), exceptions.isEmpty());
+    }
+
+    public void testUsageCountCleanup() throws Exception
+    {
+        ServiceRegistry sr = new ServiceRegistry(null, null);
+        Bundle regBundle = Mockito.mock(Bundle.class);
+
+        ServiceRegistration<?> reg = sr.registerService(
+                regBundle, new String [] {String.class.getName()}, "hi", null);
+
+        final Bundle clientBundle = Mockito.mock(Bundle.class);
+        Mockito.when(clientBundle.getBundleId()).thenReturn(327L);
+
+        assertEquals("hi", sr.getService(clientBundle, reg.getReference(), false));
+        sr.ungetService(clientBundle, reg.getReference(), null);
+
+        ConcurrentMap<Bundle, UsageCount[]> inUseMap =
+                (ConcurrentMap<Bundle, UsageCount[]>) getPrivateField(sr, "m_inUseMap");
+
+        sr.unregisterService(regBundle, reg);
+        assertEquals(0, inUseMap.size());
     }
 
     private Object getPrivateField(Object obj, String fieldName) throws NoSuchFieldException,
